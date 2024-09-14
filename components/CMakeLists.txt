@@ -110,6 +110,7 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/cmake_util.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_mpas_model.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_eamxx.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_emulator_comps.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_roms.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_model.cmake)
 
 # Set up CMAKE_MODULE_PATH so any component can use E3SM
@@ -130,6 +131,7 @@ build_emulator_comps()
 
 set(BUILDCONF ${CASEROOT}/Buildconf)
 
+build_roms_model()
 build_mpas_models()
 
 # Set global cmake settings
