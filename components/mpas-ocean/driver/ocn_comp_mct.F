@@ -48,6 +48,12 @@ module ocn_comp_mct
    use iso_c_binding, only : c_char, c_loc, c_ptr, c_int
    use mpas_c_interfacing, only : mpas_f_to_c_string, mpas_c_to_f_string
 
+#define MOAB_ROMS_COUPLING
+#ifdef MOAB_ROMS_COUPLING
+   ! include ROMS driver interface
+   use moab_roms_driver_mod, only: roms_driver_initialize, roms_driver_finalize
+#endif
+
    use ocn_core
    use ocn_core_interface
    use ocn_forcing
@@ -510,7 +516,6 @@ contains
        call mpas_log_write('Failed to find mesh stream for core ' // trim(domain % core % coreName), MPAS_LOG_CRIT)
     end if
 
-
     call mpas_f_to_c_string(domain % streams_filename, c_filename)
     call mpas_f_to_c_string(mesh_stream, c_mesh_stream)
     c_comm = domain_ptr % dminfo % comm
@@ -691,8 +696,17 @@ contains
    endif
    ent_type = 1 ! cells
 
-
 #endif
+
+#ifdef MOAB_ROMS_COUPLING
+
+    call roms_driver_initialize(mpicom_o)
+
+    !call moab_driver_mod%driver_initialize()
+    !call roms_run_coupled
+    !call driver_finalize
+#endif
+
 !-----------------------------------------------------------------------
 !
 !   initialize necessary  coupling info

@@ -458,7 +458,7 @@ module mpas_subdriver
       else
           write(histAtt, '(A,I6,A,A,A)') 'mpirun -n ', domain % dminfo % nProcs, ' ./', trim(domain % core % coreName), '_model'
       end if
-     
+
       call MPAS_stream_mgr_add_att(domain % streamManager, 'model_name', domain % core % modelName)
       call MPAS_stream_mgr_add_att(domain % streamManager, 'core_name', domain % core % coreName)
       call MPAS_stream_mgr_add_att(domain % streamManager, 'source', domain % core % source)
