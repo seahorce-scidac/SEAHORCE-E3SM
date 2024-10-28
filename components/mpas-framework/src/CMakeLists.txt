@@ -52,6 +52,19 @@ endif()
 
 set(INCLUDES "${INSTALL_SHAREDPATH}/include" "${CMAKE_CURRENT_SOURCE_DIR}/external/ezxml" "${CMAKE_BINARY_DIR}/framework" "${CMAKE_BINARY_DIR}/operators")
 
+if(NOT "$ENV{ROMS_PATH}" STREQUAL "")
+  set(USE_ROMS True)
+  set(ROMS_PATH "$ENV{ROMS_PATH}")
+  list(APPEND CPPDEFS "-DMPAS_ROMS_COUPLING")
+  list(APPEND INCLUDES ${ROMS_PATH}/include ${ROMS_PATH}/include/modules)
+  find_library(ROMS_LIBRARY ROMS
+    PATHS ${ROMS_PATH}
+    PATH_SUFFIXES "lib"
+    REQUIRED
+    DOC "ROMS library location"
+    )
+endif()
+
 if (USE_KOKKOS)
   include(${INSTALL_SHAREDPATH}/kokkos_generated_settings.cmake)
   string (REPLACE ";" " " KOKKOS_CXXFLAGS_STR "${KOKKOS_CXXFLAGS}")
@@ -80,7 +93,9 @@ add_library(common)
 target_compile_definitions(common PRIVATE ${CPPDEFS})
 target_include_directories(common PRIVATE ${INCLUDES})
 target_link_libraries(common PUBLIC spio csm_share)
-
+if (ENABLE_ROMS)
+  target_link_libraries(common PUBLIC ${ROMS_LIBRARY})
+endif (ENABLE_ROMS)
 genf90_targets("${COMMON_RAW_SOURCES}" "${INCLUDES}" "${CPPDEFS}" "" "")
 target_sources(common PRIVATE ${SOURCES})
 

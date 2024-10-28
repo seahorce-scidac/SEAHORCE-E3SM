@@ -637,6 +637,11 @@ ifneq "$(MOAB_PATH)" ""
        LIBS +=  ${MOAB_LIBS_LINK} -lstdc++
 endif
 
+ifneq "$(ROMS_PATH)" ""
+	CPPINCLUDES +=  -DHAVE_ROMS -I$(ROMS_PATH)/include -I$(ROMS_PATH)/include/modules
+	LIBS +=  ${ROMS_PATH}/lib/libROMS.a
+endif
+
 RM = rm -f
 CPP = cpp -P -traditional
 RANLIB = ranlib

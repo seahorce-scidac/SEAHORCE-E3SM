@@ -14,6 +14,8 @@ function(build_roms_model)
   string (REPLACE "-D" "" CPPDEFS "${CPPDEFS}")
   add_compile_definitions ("${CPPDEFS}")
 
+  set(ENABLE_ROMS true PARENT_SCOPE)
+  set(ROMS_BUILD_DIR ${CMAKE_CURRENT_BUILD_DIR}/roms PARENT_SCOPE)
   add_subdirectory("roms")
 
 endfunction(build_roms_model)
