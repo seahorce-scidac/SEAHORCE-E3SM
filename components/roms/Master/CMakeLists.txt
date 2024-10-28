@@ -15,7 +15,7 @@ list( APPEND _files
       Master/roms_export.F
       Master/roms_import.F
       Master/moab_coupler.F
-      Master/moab_driver.F
+      Master/moab_roms_driver.F
 )
 
 set( Master_files
