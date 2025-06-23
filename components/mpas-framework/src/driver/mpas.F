@@ -20,6 +20,6 @@ program mpas
 
    call mpas_finalize(corelist, domain)
 
-   stop
+!   stop
 
 end program mpas
