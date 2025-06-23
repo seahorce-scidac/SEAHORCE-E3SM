@@ -592,8 +592,14 @@ endif
 		LIBS += $(NCLIBF)
 	endif # CHECK FOR NETCDF4
 	ifneq "$(NETCDFF)" ""
+ifneq ($(wildcard $(NETCDFF)/lib), )
+	NETCDFFLIBLOC = lib
+endif
+ifneq ($(wildcard $(NETCDFF)/lib64), )
+	NETCDFFLIBLOC = lib64
+endif
 		FCINCLUDES += -I$(NETCDFF)/include
-		LIBS += -L$(NETCDFF)/$(NETCDFLIBLOC)
+		LIBS += -L$(NETCDFF)/$(NETCDFFLIBLOC)
 		LIBS += $(NCLIBF)
 	endif
 	LIBS += $(NCLIB)
@@ -611,6 +617,8 @@ endif
 	FCINCLUDES += -I$(PNETCDF)/include
 	LIBS += -L$(PNETCDF)/$(PNETCDFLIBLOC) -lpnetcdf
 endif
+
+LIBS += -L$(HENSON)/lib -lhenson-pmpi -lhenson
 
 ifeq "$(USE_LAPACK)" "true"
 ifndef LAPACK
@@ -777,6 +785,7 @@ ifneq "$(PICFLAG)" ""
 	CFLAGS += $(PICFLAG)
 	CXXFLAGS += $(PICFLAG)
 	LDFLAGS += $(PICFLAG)
+    LDFLAGS += -shared -Wl,-u,henson_set_contexts,-u,henson_set_namemap
 	SHAREDLIB_MESSAGE="Position-independent code was generated."
 else
 $(error Position-independent code was requested but PIC flags are not available. Please add PIC flags for the '$(BUILD_TARGET)' target)
@@ -1063,7 +1072,7 @@ drver:  $(AUTOCLEAN_DEPS) framework dycore
 
 
 mpas: $(AUTOCLEAN_DEPS) framework dycore drver
-	$(LINKER) $(LDFLAGS) -o $(EXE_NAME) $(FWPATH)/driver/*.o -L$(FWPATH) -Lsrc -ldycore -lops -lframework $(LIBS) -I./external/esmf_time_f90 -L$(FWPATH)/external/esmf_time_f90 -lesmf_time
+	$(LINKER) $(LDFLAGS) -o $(EXE_NAME).so $(FWPATH)/driver/*.o -L$(FWPATH) -Lsrc -ldycore -lops -lframework $(LIBS) -I./external/esmf_time_f90 -L$(FWPATH)/external/esmf_time_f90 -lesmf_time
 
 framework:
 	cd $(FWPATH); $(MAKE) \
