@@ -142,6 +142,7 @@ if(NOT "$ENV{ROMS_PATH}" STREQUAL "")
     REQUIRED
     DOC "ROMS library location"
     )
+  message("Found ROMS library = ${ROMS_LIBRARY}")
 endif()
 
 #build_roms_model()

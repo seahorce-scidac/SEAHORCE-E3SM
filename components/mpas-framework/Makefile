@@ -650,7 +650,7 @@ ifneq "$(MOAB_PATH)" ""
 endif
 
 ifneq "$(ROMS_PATH)" ""
-	CPPINCLUDES +=  -DHAVE_ROMS -I$(ROMS_PATH)/include -I$(ROMS_PATH)/include/modules
+	CPPINCLUDES +=  -DHAVE_ROMS -I$(ROMS_PATH)/include -I$(ROMS_PATH)/include/modules -DMOAB_ROMS_COUPLING
 	LIBS +=  ${ROMS_PATH}/lib/libROMS.a
 endif
 

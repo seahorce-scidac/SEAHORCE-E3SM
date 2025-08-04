@@ -282,6 +282,8 @@ macro(build_model COMP_CLASS COMP_NAME)
     if (USE_ROMS)
       message("Linking ROMS library now")
       target_link_libraries(${TARGET_NAME} ${ROMS_LIBRARY})
+      target_link_libraries(${TARGET_NAME} "-pie -Wl,--export-dynamic")
+      set_property(TARGET ${TARGET_NAME} PROPERTY POSITION_INDEPENDENT_CODE 1)
     endif()
 
     if (E3SM_LINK_WITH_FORTRAN)
