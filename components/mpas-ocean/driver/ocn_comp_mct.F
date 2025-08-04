@@ -43,13 +43,15 @@ module ocn_comp_mct
    use seq_comm_mct, only: MPOID
    use seq_comm_mct,      only: num_moab_exports
    use iMOAB, only: iMOAB_RegisterApplication, iMOAB_DefineTagStorage, iMOAB_SetDoubleTagStorage, &
-                    iMOAB_SendMesh, iMOAB_ReceiveMesh, iMOAB_GetMeshInfo, iMOAB_GetDoubleTagStorage
+                    iMOAB_LoadMapFile, iMOAB_MigrateMapMesh, iMOAB_SendMesh, iMOAB_ReceiveMesh, &
+                    iMOAB_GetMeshInfo, iMOAB_GetDoubleTagStorage
 #endif
    use iso_c_binding, only : c_char, c_loc, c_ptr, c_int
    use mpas_c_interfacing, only : mpas_f_to_c_string, mpas_c_to_f_string
 
 #define MOAB_ROMS_COUPLING
 #ifdef MOAB_ROMS_COUPLING
+#define MOABDEBUG
    ! include ROMS driver interface
    use moab_roms_driver_mod, only: roms_driver_initialize, roms_run_coupled, roms_driver_finalize
 #endif
@@ -266,7 +268,8 @@ contains
     integer :: ronm_appid, ronm_compid
     integer :: m2r_appid, m2r_compid
     integer :: partMethod
-    character(CXX) :: mpasroms_appname
+    integer :: arearead, discretization_type
+    character(CXX) :: mpasroms_appname, map_filename, map_identifier
 #endif
 
 #endif
@@ -368,7 +371,7 @@ contains
     ! This file is generated when a case is created.  The default file name in there is currently ocn.log.DATE-TIME.
     if (iam==0) then
        inquire(file='ocn_modelio.nml'//trim(inst_suffix),exist=exists)
-       call shr_file_setio('ocn_modelio.nml'//trim(inst_suffix), ocnLogUnit)
+       call    shr_file_setio('ocn_modelio.nml'//trim(inst_suffix), ocnLogUnit)
     endif
 
     ! Store shr log unit and level so we can reassign them later when OCN control is complete
@@ -380,7 +383,7 @@ contains
     domain_ptr => domain
 
     ! Write to ocnLogUnit here, because the log module is not open yet.
-    if (iam==0) write(ocnLogUnit,'(a,i6)') '=== Beginning ocn_init_mct: rank=',iam
+    if (iam==0) write(ocnLogUnit,'(a,i6)') '=== Beginning ocn_init_mct: rank=',iam,inst_suffix
 
     call mpas_framework_init_phase1(domain % dminfo, mpicom_o)
 
@@ -739,6 +742,8 @@ contains
     ! ROMS to run on the same set of processes as MPAS-O.
     call roms_driver_initialize(mpicom_o, MPOID, mbromspid, mbromscompid, &
                                  mbroms3dpid, mbroms3dcompid)
+    print *, 'MPAS-O: roms_driver_initialize done'
+    print *, 'MPAS-O: ROMS data: ', mbromspid, mbromscompid, mbroms3dpid, mbroms3dcompid
 
     mpasroms_appname = 'ROMS_on_MPAS'//C_NULL_CHAR
     ronm_compid = 1618
@@ -755,16 +760,18 @@ contains
       partMethod = 2 ! it is better to use RCB for atmosphere and ocean too
 #endif
     !! Send ROMS 2D mesh to MPAS-O so that we can compute the projection here.
-    ierr = iMOAB_SendMesh(mbromspid, mpicom_o, mpigrp_o, mbromscompid, partMethod)
-    if (ierr .ne. 0) then
-      write(logunit,*) 'ocn_init_mct',' error in sending mesh to MPAS '
-      call shr_sys_abort('ocn_init_mct'//' ERROR in receiving mesh to MPAS ')
-    endif
+    ierr = iMOAB_SendMesh(mbromspid, mpicom_o, mpigrp_o, ronm_compid, partMethod)
+    CALL errorout(ierr, 'error in sending ROMS mesh to MPAS PEs')
     ierr = iMOAB_ReceiveMesh(ronm_appid, mpicom_o, mpigrp_o, mbromscompid)
-    if (ierr .ne. 0) then
-      write(logunit,*) 'ocn_init_mct',' error in receiving mesh on MPAS '
-      call shr_sys_abort('ocn_init_mct'//' ERROR in receiving mesh on MPAS ')
-    endif
+    CALL errorout(ierr, 'error in receiving ROMS mesh on MPAS PEs')
+
+    ! now let us free the send buffers
+    ierr = iMOAB_FreeSenderBuffers( mbromspid, ronm_compid )
+    CALL errorout(ierr, 'cannot free buffers used to send ROMS mesh')
+
+    ! For debug purposes, let us write the received mesh
+    ierr = iMOAB_WriteMesh( ronm_appid, "recvROMSonMPAS.h5m"//C_NULL_CHAR, "PARALLEL=WRITE_PART"//C_NULL_CHAR )
+    CALL errorout(ierr, 'failed to write the received ROMS mesh')
 
     mpasroms_appname = 'MPASROMS'//C_NULL_CHAR
     m2r_compid = 8161
@@ -772,6 +779,19 @@ contains
                                     m2r_compid, &
                                     m2r_appid)
     CALL errorout(ierr, 'failed to register MPASROMS intersection application')
+
+    discretization_type = 1 ! Finite-Volume method
+    arearead = 0            ! No need to read in the areas
+    map_identifier = "MPAS_ROMS_Bilinear"//C_NULL_CHAR
+    map_filename = "mpas_roms_bilinear_map.nc"//C_NULL_CHAR
+    ierr = iMOAB_LoadMapFile( MPOID, ronm_appid, m2r_appid, discretization_type, &
+                                        discretization_type, arearead, map_identifier, map_filename )
+    CALL errorout(ierr, 'failed to load MPAS-ROMS bilinear map file')
+
+    ! because it is like "coverage", context will be m2r_compid
+    ierr = iMOAB_MigrateMapMesh( MPOID, m2r_appid, mpicom_o, mpigrp_o, mpigrp_o, &
+                                 discretization_type, OCNID, m2r_compid)
+    CALL errorout(ierr, "failed to migrate mesh for map")
 
 #endif
 
@@ -820,6 +840,9 @@ contains
        call mpas_log_write('        Please reconfigure either the coupling interval or the time step.', MPAS_LOG_ERR)
        call mpas_log_write('Model is not properly configured for coupling interval.', MPAS_LOG_CRIT)
     end if
+
+    call mpas_log_write('Coupling interval is: ' // trim(coupleTimeStamp))
+    call mpas_log_write('OCN timestep interval is: ' // trim(tempCharConfig))
 
     ! set coupling alarm
     alarmStartTime = currTime
@@ -1155,7 +1178,7 @@ contains
 #endif
       iam = domain % dminfo % my_proc_id
 
-      debugOn = .false.
+      debugOn = .true.
 #ifdef MPAS_DEBUG
       debugOn = .true.
 #endif
@@ -1197,7 +1220,6 @@ contains
       if (errorCode /= 0) then
          call mpas_log_write('Error in ocn_import_mct', MPAS_LOG_CRIT)
       endif
-
 
       ! Ensures MPAS AM write/compute startup steps are performed
       call ocn_analysis_compute_startup(domain_ptr, ierr)
@@ -1312,21 +1334,6 @@ contains
             call mpas_log_write('   Finished reading forcing streams')
          endif
 
-#ifdef MOAB_ROMS_COUPLING
-      call ocn_export_roms_moab(EClock)
-      ! We are now exporting data from MPAS-O to coupler
-      ! this is a good time to export data from MPAS-O to ROMS as well
-      ! and invoke ROMS one-way coupled run.
-      ! pass the same MPAS time to ROMS and start the run with updated data
-      if (iam==0.) then
-         call seq_timemgr_EClockGetData( EClock, stepno=cur_ocn_stepno )
-         write(lnum,"(I0.2)") cur_ocn_stepno
-         call mpas_log_write('  Computing ROMS sub-grid scale evolution for step ' // &
-                                 lnum // ' ...')
-      endif
-      call roms_run_coupled(dt)
-#endif
-
          itimestep = itimestep + 1
          call mpas_advance_clock(domain_ptr % clock)
 
@@ -1355,6 +1362,24 @@ contains
             call mpas_pool_shift_time_levels(statePool)
             block_ptr => block_ptr % next
          end do
+
+#ifdef MOAB_ROMS_COUPLING
+         ! We are now exporting data from MPAS-O to coupler
+         ! this is a good time to export data from MPAS-O to ROMS as well
+         ! and invoke ROMS one-way coupled run.
+         call mpas_log_write('   Invoking MPAS-O-ROMS-Export for one-way coupled run')
+         call ocn_export_roms_moab(EClock)
+
+         ! pass the same MPAS time to ROMS and start the run with updated data
+         if (iam==0.) then
+            call seq_timemgr_EClockGetData( EClock, stepno=cur_ocn_stepno )
+            write(lnum,"(I0.2)") cur_ocn_stepno
+            write (WCstring,'(F18.3)') dt
+            call mpas_log_write('  Computing ROMS sub-grid scale evolution for step ' // &
+                                    lnum // ' with dt = ' // WCstring // ' ...')
+         endif
+         call roms_run_coupled(dt)
+#endif
 
         ! update scaled data ice-shelf melt fluxes based on remove ice runoff
         call ocn_update_scaled_dismf(domain)
@@ -3261,6 +3286,7 @@ contains
 
  end subroutine ocn_import_mct!}}}
 !***********************************************************************
+#ifdef MOAB_ROMS_COUPLING
 !BOP
 ! !IROUTINE: ocn_export_roms_moab
 ! !INTERFACE:
@@ -3276,6 +3302,9 @@ contains
    use iMOAB,  only  : iMOAB_SetIntTagStorage, iMOAB_SetDoubleTagStorage, &
                        iMOAB_WriteMesh
 
+   use ocn_diagnostics_variables
+   use ocn_diagnostics
+
 ! !OUTPUT PARAMETERS:
    type(ESMF_Clock) , intent(inout) :: EClock    ! Input synchronization clock from driver
 
@@ -3290,34 +3319,39 @@ contains
    integer :: ent_type, ierr, cur_ocn_stepno
    integer :: tagtype, numco, tagindex
    character(len=100) :: outfile, wopts, localmeshfile, lnum
-   character(len=1024) :: dtagname, itagname, atagname
+   character(len=1024) :: dtagname, itagname, atagname, vtagname
 
    logical (kind=log_kind) :: &
          first_call = .true.   ! first call flag
    integer, allocatable :: impas2roms_arr(:,:)
-   real (kind=RKIND) , allocatable :: dmpas2roms_arr(:,:), mpas2roms_arr(:,:)
-   integer :: i, j, n, total_tagsize, nVariables
+   real (kind=RKIND) , allocatable :: dmpas2roms_arr(:,:), mpas2roms_arr(:,:), vmpas2roms_arr(:,:)
+   integer :: i, j, n, iCell, iLevel, offset, total_tagsize, nVariables, nTotalCells
    integer, pointer :: nCellsSolve, nVertLevels, index_temperatureSurfaceValue, &
                        index_salinitySurfaceValue, index_avgZonalSurfaceVelocity, &
-                       index_avgMeridionalSurfaceVelocity
+                       index_avgMeridionalSurfaceVelocity, index_salinity, &
+                       index_temperature
 
    type (block_type), pointer :: block_ptr
 
-   type (mpas_pool_type), pointer :: meshPool,             &
-                                     forcingPool,          &
-                                     statePool,            &
-                                     !thermalPool,          &
-                                     tracersPool
+   type (mpas_pool_type), pointer :: meshPool,             &!< Input: mesh information
+                                     geometryPool,         &!< Input: geometry information
+                                     forcingPool,          &!< Input: focrcing information
+                                     statePool,            &!< Input: current state information
+                                     tracersPool            !< Input: tracer state information
+
+   real(kind=RKIND), dimension(:,:,:), pointer :: activeTracers
 
    integer, dimension(:), pointer :: minLevelCell, &
                                      maxLevelCell
 
-   real (kind=RKIND), dimension(:), pointer :: ssh, &
-                                               bottomDepth, fCell
+   real (kind=RKIND), dimension(:), pointer :: areaCell, ssh, &
+                                               bottomDepth, fCell, &
+                                               refBottomDepth
 
    real (kind=RKIND), dimension(:,:), pointer :: avgTracersSurfaceValue, avgSurfaceVelocity
+                                                !velocityZonalSquared, velocityMeridionalSquared
 
-   real (kind=RKIND), dimension(:,:), pointer :: layerThickness, temperature, salinity
+   real (kind=RKIND), dimension(:,:), pointer :: layerThickness
 
    real (kind=RKIND), dimension(:), pointer ::  seaIcePressure, &
                                                 atmosphericPressure, windStressZonal, &
@@ -3328,152 +3362,217 @@ contains
    nVariables = 13
    itagname = trim('minLevelCell:maxLevelCell')//C_NULL_CHAR
    atagname = trim('ssh:bottomDepth:fCell:seaIcePressure:atmosphericPressure:windStressZonal:windStressMeridional:evaporationFlux:rainFlux:temperatureSurfaceValue:salinitySurfaceValue:avgZonalSurfaceVelocity:avgMeridionalSurfaceVelocity')//C_NULL_CHAR
-   dtagname = trim('layerThicknessMPAS:temperature:salinity')//C_NULL_CHAR
+   dtagname = trim('layerThickness:temperature:salinity:velocityZonal:velocityMeridional')//C_NULL_CHAR
+   vtagname = trim('refBottomDepth')//C_NULL_CHAR
 
    n = 0
+   nTotalCells = 0
    block_ptr => domain % blocklist
    do while(associated(block_ptr))
-     call mpas_pool_get_subpool(block_ptr % structs, 'mesh', meshPool)
-     call mpas_pool_get_subpool(block_ptr % structs, 'forcing', forcingPool)
-     call mpas_pool_get_subpool(block_ptr % structs, 'state', statePool)
 
-     call mpas_pool_get_subpool(statePool, 'tracers', tracersPool)
-     !call mpas_pool_get_subpool(block_ptr % structs, 'thermal', thermalPool)
+      call MPAS_pool_get_dimension(block_ptr % dimensions, "nCellsSolve", nCellsSolve)
+      call MPAS_pool_get_dimension(block_ptr % dimensions, "nVertLevels", nVertLevels)
 
-     call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve)
-     call mpas_pool_get_array(meshPool, 'minLevelCell', minLevelCell)
-     call mpas_pool_get_array(meshPool, 'maxLevelCell', maxLevelCell)
-     call mpas_pool_get_array(meshPool, 'bottomDepth', bottomDepth, 1)
-     call mpas_pool_get_array(meshPool, 'fCell', fCell, 1)
+      if (first_call) then
 
-     call MPAS_pool_get_dimension(block_ptr % dimensions, "nVertLevels", nVertLevels)
+         ! define tags according to the atagname
+         tagtype = 1  ! dense, double
+         numco = 1 !  one value per cell / entitys
+         ierr = iMOAB_DefineTagStorage(MPOID, atagname, tagtype, numco, tagindex )
+         if ( ierr == 1 ) then
+            call mpas_log_write('cannot define tags for MOAB atagname fields ' // trim(atagname), MPAS_LOG_ERR)
+         endif
 
-     if (first_call) then
+         numco = nVertLevels !  nvertical level values per cell
+         ierr = iMOAB_DefineTagStorage(MPOID, dtagname, tagtype, numco, tagindex )
+         if ( ierr == 1 ) then
+            call mpas_log_write('cannot define tags for MOAB dtagname fields ' // trim(dtagname), MPAS_LOG_ERR)
+         endif
 
-       ! define tags according to the atagname
-       tagtype = 1  ! dense, double
-       numco = 1 !  one value per cell / entitys
-       ierr = iMOAB_DefineTagStorage(MPOID, atagname, tagtype, numco, tagindex )
-       if ( ierr == 1 ) then
-         call mpas_log_write('cannot define tags for MOAB atagname fields ' // trim(atagname), MPAS_LOG_ERR)
-       endif
-       numco = nVertLevels !  one value per cell / entity
-       ierr = iMOAB_DefineTagStorage(MPOID, dtagname, tagtype, numco, tagindex )
-       if ( ierr == 1 ) then
-         call mpas_log_write('cannot define tags for MOAB atagname fields ' // trim(atagname), MPAS_LOG_ERR)
-       endif
-       numco = 1 !  one value per cell / entity
-       tagtype = 0  ! dense, integer
-       ierr = iMOAB_DefineTagStorage(MPOID, itagname, tagtype, numco, tagindex )
-       if ( ierr == 1 ) then
-         call mpas_log_write('cannot define tags for MOAB itagname fields ' // trim(itagname), MPAS_LOG_ERR)
-       endif
-       first_call = .false.
-     endif
+         numco = nVertLevels !  nvertical level values
+         tagtype = 4  ! sparse, double
+         ierr = iMOAB_DefineTagStorage(MPOID, vtagname, tagtype, numco, tagindex )
+         if ( ierr == 1 ) then
+            call mpas_log_write('cannot define tags for MOAB vtagname fields ' // trim(vtagname), MPAS_LOG_ERR)
+         endif
+
+         numco = 1 !  one value per cell / entity
+         tagtype = 0  ! dense, integer
+         ierr = iMOAB_DefineTagStorage(MPOID, itagname, tagtype, numco, tagindex )
+         if ( ierr == 1 ) then
+            call mpas_log_write('cannot define tags for MOAB itagname fields ' // trim(itagname), MPAS_LOG_ERR)
+         endif
+
+         first_call = .false.
+      endif
+
+      call mpas_pool_get_subpool(block_ptr % structs, "mesh", meshPool)
+      call mpas_pool_get_subpool(block_ptr % structs, "geometry", geometryPool)
+      call mpas_pool_get_subpool(block_ptr % structs, "forcing", forcingPool)
+      call mpas_pool_get_subpool(block_ptr % structs, "state", statePool)
+      call mpas_pool_get_subpool(statePool, "tracers", tracersPool)
+
+      call mpas_pool_get_array(meshPool, "areaCell", areaCell)
+      call mpas_pool_get_array(meshPool, "minLevelCell", minLevelCell)
+      call mpas_pool_get_array(meshPool, "maxLevelCell", maxLevelCell)
+      call mpas_pool_get_array(statePool, "layerThickness", layerThickness, timeLevel=1)
+      !call mpas_pool_get_array(geometryPool, 'layerThickness', layerThickness, timeLevel=1)
+      call mpas_pool_get_array(statePool, "ssh", ssh, 1)
+
+      ! get index of temperature and salinity data
+      call mpas_pool_get_array(tracersPool, "activeTracers", activeTracers, timeLevel=1)
+      call mpas_pool_get_dimension(tracersPool, "index_temperature", index_temperature)
+      call mpas_pool_get_dimension(tracersPool, "index_salinity", index_salinity)
+
+      ! get static data from mesh pool
+      call mpas_pool_get_array(meshPool, "refBottomDepth", refBottomDepth)
+
+      call mpas_pool_get_array(meshPool, "bottomDepth", bottomDepth, 1)
+      call mpas_pool_get_array(meshPool, "fCell", fCell, 1)
+
+      call mpas_pool_get_dimension(forcingPool, "index_avgTemperatureSurfaceValue", index_temperatureSurfaceValue)
+      call mpas_pool_get_dimension(forcingPool, "index_avgSalinitySurfaceValue", index_salinitySurfaceValue)
+      call mpas_pool_get_dimension(forcingPool, "index_avgSurfaceVelocityZonal", index_avgZonalSurfaceVelocity)
+      call mpas_pool_get_dimension(forcingPool, "index_avgSurfaceVelocityMeridional", index_avgMeridionalSurfaceVelocity)
+
+      call mpas_pool_get_array(forcingPool, "avgTracersSurfaceValue", avgTracersSurfaceValue)
+      call mpas_pool_get_array(forcingPool, "avgSurfaceVelocity", avgSurfaceVelocity)
+      call mpas_pool_get_array(forcingPool, "seaIcePressure", seaIcePressure)
+      call mpas_pool_get_array(forcingPool, "atmosphericPressure", atmosphericPressure)
+      call mpas_pool_get_array(forcingPool, "windStressZonal", windStressZonal)
+      call mpas_pool_get_array(forcingPool, "windStressMeridional", windStressMeridional)
+      call mpas_pool_get_array(forcingPool, "evaporationFlux", evaporationFlux)
+      call mpas_pool_get_array(forcingPool, "rainFlux", rainFlux)
+
+   !   write(ocnLogUnit,*) 'Exporting MPAS-ROMS fields: ', nCellsSolve, nVertLevels, index_temperature, index_salinity, &
+   !   index_temperatureSurfaceValue, index_salinitySurfaceValue, &
+   !   index_avgZonalSurfaceVelocity, index_avgMeridionalSurfaceVelocity
 
      ! allocate our tag array
      if (.not. allocated(impas2roms_arr)) then
         allocate (impas2roms_arr(nCellsSolve, 2) )
-        allocate (dmpas2roms_arr(nVertLevels * nCellsSolve, 3) )
         allocate (mpas2roms_arr(nCellsSolve, nVariables) )
+        allocate (dmpas2roms_arr(nVertLevels * nCellsSolve, 5) )
+        allocate (vmpas2roms_arr(nVertLevels, 1) )
      endif
 
-     call mpas_pool_get_dimension(forcingPool, 'index_avgTemperatureSurfaceValue', index_temperatureSurfaceValue)
-     call mpas_pool_get_dimension(forcingPool, 'index_avgSalinitySurfaceValue', index_salinitySurfaceValue)
-     call mpas_pool_get_dimension(forcingPool, 'index_avgSurfaceVelocityZonal', index_avgZonalSurfaceVelocity)
-     call mpas_pool_get_dimension(forcingPool, 'index_avgSurfaceVelocityMeridional', index_avgMeridionalSurfaceVelocity)
+     impas2roms_arr(:,:) = 0
+     mpas2roms_arr(:,:) = 0.0
+     vmpas2roms_arr(:,:) = 0.0
+     vmpas2roms_arr(:,:) = 0.0
 
-     call mpas_pool_get_array(statePool, 'ssh', ssh, 1)
+     do j = 1, nVertLevels
+       vmpas2roms_arr(j, 1) = refBottomDepth(j)
+     end do
 
-     call mpas_pool_get_array(statePool, 'layerThickness', layerThickness, 1)
-     call mpas_pool_get_array(statePool, 'temperature', temperature)
-     call mpas_pool_get_array(statePool, 'salinity', salinity, 1)
-
-     call mpas_pool_get_array(forcingPool, 'avgTracersSurfaceValue', avgTracersSurfaceValue)
-     call mpas_pool_get_array(forcingPool, 'avgSurfaceVelocity', avgSurfaceVelocity)
-     call mpas_pool_get_array(forcingPool, 'seaIcePressure', seaIcePressure)
-     call mpas_pool_get_array(forcingPool, 'atmosphericPressure', atmosphericPressure)
-     call mpas_pool_get_array(forcingPool, 'windStressZonal', windStressZonal)
-     call mpas_pool_get_array(forcingPool, 'windStressMeridional', windStressMeridional)
-     call mpas_pool_get_array(forcingPool, 'evaporationFlux', evaporationFlux)
-     call mpas_pool_get_array(forcingPool, 'rainFlux', rainFlux)
-
-     do i = 1, nCellsSolve
+     do iCell = 1, nCellsSolve
        n = n + 1
 
-       impas2roms_arr(n, 1) = minLevelCell(i)
-       impas2roms_arr(n, 2) = maxLevelCell(i)
+       impas2roms_arr(n, 1) = minLevelCell(iCell)
+       impas2roms_arr(n, 2) = maxLevelCell(iCell)
 
-       mpas2roms_arr(n, 1)  = ssh(i)
-       mpas2roms_arr(n, 2)  = bottomDepth(i)
-       mpas2roms_arr(n, 3)  = fCell(i)
-       mpas2roms_arr(n, 4)  = seaIcePressure(i)
-       mpas2roms_arr(n, 5)  = atmosphericPressure(i)
-       mpas2roms_arr(n, 6)  = windStressZonal(i)
-       mpas2roms_arr(n, 7)  = windStressMeridional(i)
-       mpas2roms_arr(n, 8)  = evaporationFlux(i)
-       mpas2roms_arr(n, 9)  = rainFlux(i)
+       mpas2roms_arr(n, 1)  = ssh(iCell)
+       mpas2roms_arr(n, 2)  = bottomDepth(iCell)
+       mpas2roms_arr(n, 3)  = fCell(iCell)
+       mpas2roms_arr(n, 4)  = seaIcePressure(iCell)
+       mpas2roms_arr(n, 5)  = atmosphericPressure(iCell)
+       mpas2roms_arr(n, 6)  = windStressZonal(iCell)
+       mpas2roms_arr(n, 7)  = windStressMeridional(iCell)
+       mpas2roms_arr(n, 8)  = evaporationFlux(iCell)
+       mpas2roms_arr(n, 9)  = rainFlux(iCell)
 
        ! temperature, salinity, velocities
-       mpas2roms_arr(n, 10) = avgTracersSurfaceValue(index_temperatureSurfaceValue, i)
-       mpas2roms_arr(n, 11) = avgTracersSurfaceValue(index_salinitySurfaceValue, i)
-       mpas2roms_arr(n, 12) = avgSurfaceVelocity(index_avgZonalSurfaceVelocity, i)
-       mpas2roms_arr(n, 13) = avgSurfaceVelocity(index_avgMeridionalSurfaceVelocity, i)
+       mpas2roms_arr(n, 10) = avgTracersSurfaceValue(index_temperatureSurfaceValue, iCell)
+       mpas2roms_arr(n, 11) = avgTracersSurfaceValue(index_salinitySurfaceValue, iCell)
+       mpas2roms_arr(n, 12) = avgSurfaceVelocity(index_avgZonalSurfaceVelocity, iCell)
+       mpas2roms_arr(n, 13) = avgSurfaceVelocity(index_avgMeridionalSurfaceVelocity, iCell)
 
        ! 3D tag - set as nVertLevels * nCellsSolve
-       do j = 1, nVertLevels
-          dmpas2roms_arr((n-1)*nVertLevels+j, 1)  = layerThickness(i, j)
-          !dmpas2roms_arr((n-1)*nVertLevels+j, 2)  = temperature(i, j)
-          !dmpas2roms_arr((n-1)*nVertLevels+j, 3)  = salinity(i, j)
-          dmpas2roms_arr((n-1)*nVertLevels+j, 2)  = 0.0D0
-          dmpas2roms_arr((n-1)*nVertLevels+j, 3)  = 0.0D0
+       !do iLevel = minLevelCell(iCell), maxLevelCell(iCell) ! 1, nVertLevels
+       !  dmpas2roms_arr(offset, 1)  = layerThickness(1, iCell)
+       !end do
+       do iLevel = minLevelCell(iCell), maxLevelCell(iCell) ! 1, nVertLevels
+          offset = (n-1)*nVertLevels + iLevel
+          !offset = (iLevel-1)*nCellsSolve + iCell
+          if (iLevel .gt. minLevelCell(iCell)) then
+            dmpas2roms_arr(offset, 1)  = layerThickness(iLevel, iCell) + dmpas2roms_arr(offset-1, 1)
+          else
+            dmpas2roms_arr(offset, 1)  = layerThickness(1, iCell)
+          endif
+          if (iCell .eq. 1) print *, n, iCell, iLevel, " - Layer thickness: ", layerThickness(iLevel, iCell), dmpas2roms_arr(offset, 1)
+          ! dmpas2roms_arr(offset, 2)  = 0.0D0
+          ! dmpas2roms_arr(offset, 3)  = 0.0D0
+          dmpas2roms_arr(offset, 2)  = activeTracers(index_temperature, iLevel, iCell)
+          dmpas2roms_arr(offset, 3)  = activeTracers(index_salinity, iLevel, iCell)
+          dmpas2roms_arr(offset, 4)  = velocityZonal(iLevel, iCell)
+          dmpas2roms_arr(offset, 5)  = velocityMeridional(iLevel, iCell)
        end do
 
      end do
 
+     nTotalCells = nTotalCells + nCellsSolve
      block_ptr => block_ptr % next
    end do
 
    ! Now, set all the tags on MOAB
    ent_type = 1 ! cells
    !  set all tags in one method
-   total_tagsize = nCellsSolve * 2
-   ierr = iMOAB_SetIntTagStorage ( MPOID, itagname, total_tagsize, ent_type, impas2roms_arr(1, 1) )
+   total_tagsize = nTotalCells
+   ierr = iMOAB_SetIntTagStorage ( MPOID, 'minLevelCell'//C_NULL_CHAR, total_tagsize, ent_type, impas2roms_arr(:,1) )
    if ( ierr /= 0 ) then
-      write(ocnLogUnit,*) 'Fail to set minLevelCell:maxLevelCell MOAB fields '
+      write(ocnLogUnit,*) 'Failed to set minLevelCell MOAB fields '
+   endif
+   ierr = iMOAB_SetIntTagStorage ( MPOID, 'maxLevelCell'//C_NULL_CHAR, total_tagsize, ent_type, impas2roms_arr(:,2) )
+   if ( ierr /= 0 ) then
+      write(ocnLogUnit,*) 'Failed to set maxLevelCell MOAB fields '
    endif
 
    !  set all tags in one method
-   total_tagsize = nCellsSolve * nVertLevels * 3
-   ierr = iMOAB_SetDoubleTagStorage ( MPOID, dtagname, total_tagsize, ent_type, dmpas2roms_arr(1, 1) )
+   total_tagsize = nTotalCells * nVertLevels * 5
+   ierr = iMOAB_SetDoubleTagStorage ( MPOID, dtagname, total_tagsize, ent_type, dmpas2roms_arr(1,1) )
    if ( ierr /= 0 ) then
-      write(ocnLogUnit,*) 'Fail to set layerThickness:temperature:salinity MOAB fields '
+      write(ocnLogUnit,*) 'Failed to set layerThickness:temperature:salinity MOAB fields '
    endif
+
    !  set all tags in one method
-   total_tagsize = nCellsSolve * nVariables
-   ierr = iMOAB_SetDoubleTagStorage ( MPOID, atagname, total_tagsize, ent_type, mpas2roms_arr(1, 1) )
+   total_tagsize = nVertLevels * 1
+   ierr = iMOAB_SetDoubleTagStorage ( MPOID, vtagname, total_tagsize, ent_type, vmpas2roms_arr(1,1) )
    if ( ierr /= 0 ) then
-      write(ocnLogUnit,*) 'Fail to set MOAB tags related to ROMS fields '
+      write(ocnLogUnit,*) 'Failed to set refBottomDepth MOAB fields '
    endif
+
+   !  set all tags in one method
+   total_tagsize = nTotalCells * nVariables
+   ierr = iMOAB_SetDoubleTagStorage ( MPOID, atagname, total_tagsize, ent_type, mpas2roms_arr(1,1) )
+   if ( ierr /= 0 ) then
+      write(ocnLogUnit,*) 'Failed to set MOAB tags related to ROMS fields '
+   endif
+
    !-----------------------------------------------------------------------
    !EOC
 !#ifdef MOABDEBUG
       call seq_timemgr_EClockGetData( EClock, stepno=cur_ocn_stepno )
-      write(lnum,"(I0.2)")cur_ocn_stepno
+      write(lnum,"(I0.2)") cur_ocn_stepno
       outfile = 'mpaso_roms_export_'//trim(lnum)//'.h5m'//C_NULL_CHAR
       wopts   = 'PARALLEL=WRITE_PART'//C_NULL_CHAR
+
+      call mpas_log_write('   Writing MPAS-O mesh and data to ' // outfile // ' in ocn_export_roms_moab')
       ierr = iMOAB_WriteMesh(MPOID, outfile, wopts)
 !#endif
 
    ! deallocate moab fields array
-   deallocate (impas2roms_arr)
-   deallocate (dmpas2roms_arr)
-   deallocate (mpas2roms_arr)
+   if (allocated(impas2roms_arr)) then
+      deallocate (impas2roms_arr)
+      deallocate (mpas2roms_arr)
+      deallocate (dmpas2roms_arr)
+      deallocate (vmpas2roms_arr)
+   endif
 
 !-----------------------------------------------------------------------
 !EOC
 
  end subroutine ocn_export_roms_moab!}}}
+#endif
 !BOP
 ! !IROUTINE: ocn_export_moab
 ! !INTERFACE:
