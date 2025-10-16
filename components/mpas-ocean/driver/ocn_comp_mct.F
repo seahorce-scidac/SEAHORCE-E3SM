@@ -742,8 +742,6 @@ contains
     ! ROMS to run on the same set of processes as MPAS-O.
     call roms_driver_initialize(mpicom_o, MPOID, mbromspid, mbromscompid, &
                                  mbroms3dpid, mbroms3dcompid)
-    print *, 'MPAS-O: roms_driver_initialize done'
-    print *, 'MPAS-O: ROMS data: ', mbromspid, mbromscompid, mbroms3dpid, mbroms3dcompid
 
     mpasroms_appname = 'ROMS_on_MPAS'//C_NULL_CHAR
     ronm_compid = 1618
@@ -780,7 +778,9 @@ contains
                                     m2r_appid)
     CALL errorout(ierr, 'failed to register MPASROMS intersection application')
 
-    discretization_type = 1 ! Finite-Volume method
+    if(iam == 0) print *, 'MPAS-O: ROMS data initialized: ', mbromspid, mbromscompid, mbroms3dpid, mbroms3dcompid
+
+    discretization_type = 3 ! Finite-Volume method
     arearead = 0            ! No need to read in the areas
     map_identifier = "MPAS_ROMS_Bilinear"//C_NULL_CHAR
     map_filename = "mpas_roms_bilinear_map.nc"//C_NULL_CHAR
@@ -3497,7 +3497,7 @@ contains
           if (iLevel .gt. minLevelCell(iCell)) then
             dmpas2roms_arr(offset, 1)  = layerThickness(iLevel, iCell) + dmpas2roms_arr(offset-1, 1)
           else
-            dmpas2roms_arr(offset, 1)  = layerThickness(1, iCell)
+            dmpas2roms_arr(offset, 1)  = layerThickness(minLevelCell(iCell), iCell)
           endif
           if (iCell .eq. 1) print *, n, iCell, iLevel, " - Layer thickness: ", layerThickness(iLevel, iCell), dmpas2roms_arr(offset, 1)
           ! dmpas2roms_arr(offset, 2)  = 0.0D0

@@ -259,6 +259,7 @@ macro(build_model COMP_CLASS COMP_NAME)
   endforeach()
 
   if (COMP_NAME STREQUAL "cpl")
+    # ----- building original e3sm.exe -----
     set(TARGET_NAME "${CIME_MODEL}.exe")
     add_executable(${TARGET_NAME})
     target_sources(${TARGET_NAME} PRIVATE ${REAL_SOURCES})
@@ -282,8 +283,8 @@ macro(build_model COMP_CLASS COMP_NAME)
     if (USE_ROMS)
       message("Linking ROMS library now")
       target_link_libraries(${TARGET_NAME} ${ROMS_LIBRARY})
-      target_link_libraries(${TARGET_NAME} "-pie -Wl,--export-dynamic")
       set_property(TARGET ${TARGET_NAME} PROPERTY POSITION_INDEPENDENT_CODE 1)
+      #target_link_libraries(${TARGET_NAME} "-pie -Wl,--export-dynamic")
     endif()
 
     if (E3SM_LINK_WITH_FORTRAN)
@@ -302,10 +303,96 @@ macro(build_model COMP_CLASS COMP_NAME)
       endif()
 
     endif()
+    # ----- end of building original e3sm.exe -----
+
+
+    # ----- building e3sm_shared.so for wilkins workflow -----
+
+    set                         (HENSON_LIBRARIES $ENV{HENSON_PATH}/lib/libhenson-pmpi.so $ENV{HENSON_PATH}/lib/libhenson.a)
+    set                         (WILKINS_TARGET "e3sm_shared")
+
+    add_library                 (${WILKINS_TARGET} SHARED)
+    target_sources              (${WILKINS_TARGET} PRIVATE ${REAL_SOURCES})
+    target_link_libraries       (${WILKINS_TARGET} ${HENSON_LIBRARIES})
+    set_target_properties       (${WILKINS_TARGET} PROPERTIES PREFIX "")
+    set_target_properties       (${WILKINS_TARGET} PROPERTIES SUFFIX ".so")
+    set                         (linker_flags "-pie -Wl,--export-dynamic")
+    set                         (linker_flags "${linker_flags} -Wl,-u,henson_set_contexts,-u,henson_set_namemap")
+    set_target_properties       (${WILKINS_TARGET} PROPERTIES LINK_FLAGS ${linker_flags})
+
+    get_target_property         (TARGET_FFLAGS ${WILKINS_TARGET} FFLAGS)
+    message                     ("FFLAGS for ${WILKINS_TARGET}: ${TARGET_FFLAGS}")
+
+    set_target_properties       (${WILKINS_TARGET} PROPERTIES FFLAGS "-fPIC")
+
+    get_target_property         (TARGET_FFLAGS ${WILKINS_TARGET} FFLAGS)
+    message                     ("FFLAGS for ${WILKINS_TARGET}: ${TARGET_FFLAGS}")
+
+    separate_arguments(ALL_LIBS_LIST UNIX_COMMAND "${SLIBS}")
+
+    foreach(ITEM IN LISTS COMP_CLASSES)
+      if (NOT ITEM STREQUAL "cpl")
+          set_target_properties(${ITEM} PROPERTIES FFLAGS "-fPIC")
+          target_link_libraries(${WILKINS_TARGET} ${ITEM})
+      endif()
+    endforeach()
+
+    foreach(ITEM IN LISTS ALL_LIBS_LIST)
+        target_link_libraries(${WILKINS_TARGET} ${ITEM})
+    endforeach()
+
+    if (USE_MOAB)
+        target_link_libraries(${WILKINS_TARGET} ${MOAB_LIBRARIES})
+        target_include_directories(${WILKINS_TARGET} PRIVATE ${MOAB_INCLUDE_DIRS})
+    endif()
+    
+    if (USE_ROMS)
+      message("Linking ROMS library now")
+      target_link_libraries(${WILKINS_TARGET} ${ROMS_LIBRARY})
+      set_property(TARGET ${WILKINS_TARGET} PROPERTY POSITION_INDEPENDENT_CODE 1)
+      #target_link_libraries(${WILKINS_TARGET} "-pie -Wl,--export-dynamic")
+    endif()
+
+    # Make sure we link blas/lapack
+    if (NOT DEFINED ENV{SKIP_BLAS})
+        target_link_libraries(${WILKINS_TARGET} BLAS::BLAS LAPACK::LAPACK)
+    endif()
+
+    if (E3SM_LINK_WITH_FORTRAN)
+        set_target_properties(${WILKINS_TARGET} PROPERTIES LINKER_LANGUAGE Fortran)
+
+      # A bit hacky, some platforms need help with the fortran linker
+      if (COMPILER STREQUAL "intel" OR COMPILER STREQUAL "oneapi-ifx")
+        string(APPEND CMAKE_EXE_LINKER_FLAGS " -cxxlib")
+      endif()
+
+    else()
+        set_target_properties(${WILKINS_TARGET} PROPERTIES LINKER_LANGUAGE CXX)
+
+      if (COMPILER STREQUAL "oneapi-ifxgpu")
+        string(APPEND CMAKE_EXE_LINKER_FLAGS " -Wl,-\-defsym,main=MAIN_\_ -lifcore -\-intel -fsycl -lsycl -Xsycl-target-backend \"-device 12.60.7\" ")
+      endif()
+
+    endif()
+
+    # Subtle: In order for fortran dependency scanning to work, our CPPFPP/DEFS must be registered
+    # as COMPILE_DEFINITIONS, not simple added via CMAKE_Fortran_Flags. Also, CPPDEFS *must*
+    # be provided as a list, not a whitespace-separated string; otherwise, things get wonky.
+    separate_arguments(WILKINS_CPPDEFS_LIST UNIX_COMMAND "${CPPDEFS}")
+    target_compile_definitions(${WILKINS_TARGET} PRIVATE ${WILKINS_CPPDEFS_LIST})
+    add_dependencies(${WILKINS_TARGET} genf90)
+
+    # Set flags for target
+    target_include_directories(${WILKINS_TARGET} PRIVATE ${INCLDIR})
+
+    # ----- end building e3sm_shared.so for wilkins workflow -----
+
 
   else()
     set(TARGET_NAME ${COMP_CLASS})
     add_library(${TARGET_NAME})
+    # required to link ito e3sm_shared.so
+    set_target_properties(${TARGET_NAME} PROPERTIES FFLAGS "-fPIC")
     target_sources(${TARGET_NAME} PRIVATE ${REAL_SOURCES})
     if (COMP_NAME STREQUAL "csm_share")
       find_package(NETCDF REQUIRED)
@@ -367,5 +454,8 @@ macro(build_model COMP_CLASS COMP_NAME)
 
   # Set flags for target
   target_include_directories(${TARGET_NAME} PRIVATE ${INCLDIR})
+
+  # required to link ito e3sm_shared.so
+  set_target_properties(${TARGET_NAME} PROPERTIES FFLAGS "-fPIC")
 
 endmacro(build_model)
