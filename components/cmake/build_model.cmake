@@ -323,7 +323,7 @@ macro(build_model COMP_CLASS COMP_NAME)
     get_target_property         (TARGET_FFLAGS ${WILKINS_TARGET} FFLAGS)
     message                     ("FFLAGS for ${WILKINS_TARGET}: ${TARGET_FFLAGS}")
 
-    set_target_properties       (${WILKINS_TARGET} PROPERTIES FFLAGS "-fPIC")
+    set_target_properties       (${WILKINS_TARGET} PROPERTIES FFLAGS "-fPIC -DPIC")
 
     get_target_property         (TARGET_FFLAGS ${WILKINS_TARGET} FFLAGS)
     message                     ("FFLAGS for ${WILKINS_TARGET}: ${TARGET_FFLAGS}")
@@ -332,7 +332,7 @@ macro(build_model COMP_CLASS COMP_NAME)
 
     foreach(ITEM IN LISTS COMP_CLASSES)
       if (NOT ITEM STREQUAL "cpl")
-          set_target_properties(${ITEM} PROPERTIES FFLAGS "-fPIC")
+          set_target_properties(${ITEM} PROPERTIES FFLAGS "-fPIC -DPIC")
           target_link_libraries(${WILKINS_TARGET} ${ITEM})
       endif()
     endforeach()
