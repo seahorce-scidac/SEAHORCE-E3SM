@@ -5074,8 +5074,8 @@ contains
       outfile = 'mpaso_roms_export_'//trim(lnum)//'.h5m'//C_NULL_CHAR
       wopts   = 'PARALLEL=WRITE_PART'//C_NULL_CHAR
 
-      ! call mpas_log_write('   Writing MPAS-O mesh and data to ' // outfile // ' in ocn_export_roms_moab')
-      ! ierr = iMOAB_WriteMesh(MPOID, outfile, wopts)
+      call mpas_log_write('   Writing MPAS-O mesh and data to ' // outfile // ' in ocn_export_roms_moab')
+      ierr = iMOAB_WriteMesh(MPOID, outfile, wopts)
       ! outfile = 'mpaso_roms_export_'//trim(lnum)//C_NULL_CHAR
       ! ierr = iMOAB_WriteCoverageMesh(m2r_appid, outfile)
 !#endif
