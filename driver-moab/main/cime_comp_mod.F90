@@ -736,18 +736,22 @@ contains
     integer(i8) :: beg_count          ! start time
     integer(i8) :: end_count          ! end time
     integer(i8) :: irtc_rate          ! factor to convert time to seconds
+    logical :: is_mpi_initialized
 
     integer :: tmode ! Thread mode provided by the MPI library
 
     beg_count = shr_sys_irtc(irtc_rate)
 
+    call mpi_initialized(is_mpi_initialized, ierr)
+    if (.not. is_mpi_initialized) then
 #if defined(MPI_INIT_THREADED)
-    call mpi_init_thread(MPI_THREAD_MULTIPLE, tmode, ierr)
+      call mpi_init_thread(MPI_THREAD_MULTIPLE, tmode, ierr)
 #else
-    call mpi_init(ierr)
+      call mpi_init(ierr)
 #endif
-
-    call shr_mpi_chkerr(ierr,subname//' mpi_init')
+      call shr_mpi_chkerr(ierr,subname//' mpi_init')
+      call mpi_init(ierr)
+    end if
 
     end_count = shr_sys_irtc(irtc_rate)
     mpi_init_time = real( (end_count-beg_count), r8)/real(irtc_rate, r8)
