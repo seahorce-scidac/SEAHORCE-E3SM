@@ -750,7 +750,6 @@ contains
       call mpi_init(ierr)
 #endif
       call shr_mpi_chkerr(ierr,subname//' mpi_init')
-      call mpi_init(ierr)
     end if
 
     end_count = shr_sys_irtc(irtc_rate)
