@@ -307,84 +307,85 @@ macro(build_model COMP_CLASS COMP_NAME)
 
 
     # ----- building e3sm_shared.so for wilkins workflow -----
+    if(DEFINED HENSON_PATH OR DEFINED ENV{HENSON_PATH})
 
-    set                         (HENSON_LIBRARIES $ENV{HENSON_PATH}/lib/libhenson-pmpi.so $ENV{HENSON_PATH}/lib/libhenson.a)
-    set                         (WILKINS_TARGET "e3sm_shared")
+        set                         (HENSON_LIBRARIES $ENV{HENSON_PATH}/lib/libhenson-pmpi.so $ENV{HENSON_PATH}/lib/libhenson.a)
+        set                         (WILKINS_TARGET "e3sm_shared")
 
-    add_library                 (${WILKINS_TARGET} SHARED)
-    target_sources              (${WILKINS_TARGET} PRIVATE ${REAL_SOURCES})
-    target_link_libraries       (${WILKINS_TARGET} ${HENSON_LIBRARIES})
-    set_target_properties       (${WILKINS_TARGET} PROPERTIES PREFIX "")
-    set_target_properties       (${WILKINS_TARGET} PROPERTIES SUFFIX ".so")
-    set                         (linker_flags "-pie -Wl,--export-dynamic")
-    set                         (linker_flags "${linker_flags} -Wl,-u,henson_set_contexts,-u,henson_set_namemap")
-    set_target_properties       (${WILKINS_TARGET} PROPERTIES LINK_FLAGS ${linker_flags})
+        add_library                 (${WILKINS_TARGET} SHARED)
+        target_sources              (${WILKINS_TARGET} PRIVATE ${REAL_SOURCES})
+        target_link_libraries       (${WILKINS_TARGET} ${HENSON_LIBRARIES})
+        set_target_properties       (${WILKINS_TARGET} PROPERTIES PREFIX "")
+        set_target_properties       (${WILKINS_TARGET} PROPERTIES SUFFIX ".so")
+        set                         (linker_flags "-pie -Wl,--export-dynamic")
+        set                         (linker_flags "${linker_flags} -Wl,-u,henson_set_contexts,-u,henson_set_namemap")
+        set_target_properties       (${WILKINS_TARGET} PROPERTIES LINK_FLAGS ${linker_flags})
 
-    get_target_property         (TARGET_FFLAGS ${WILKINS_TARGET} FFLAGS)
-    message                     ("FFLAGS for ${WILKINS_TARGET}: ${TARGET_FFLAGS}")
+        get_target_property         (TARGET_FFLAGS ${WILKINS_TARGET} FFLAGS)
+        message                     ("FFLAGS for ${WILKINS_TARGET}: ${TARGET_FFLAGS}")
 
-    set_target_properties       (${WILKINS_TARGET} PROPERTIES FFLAGS "-fPIC -DPIC")
+        set_target_properties       (${WILKINS_TARGET} PROPERTIES FFLAGS "-fPIC -DPIC")
 
-    get_target_property         (TARGET_FFLAGS ${WILKINS_TARGET} FFLAGS)
-    message                     ("FFLAGS for ${WILKINS_TARGET}: ${TARGET_FFLAGS}")
+        get_target_property         (TARGET_FFLAGS ${WILKINS_TARGET} FFLAGS)
+        message                     ("FFLAGS for ${WILKINS_TARGET}: ${TARGET_FFLAGS}")
 
-    separate_arguments(ALL_LIBS_LIST UNIX_COMMAND "${SLIBS}")
+        separate_arguments(ALL_LIBS_LIST UNIX_COMMAND "${SLIBS}")
 
-    foreach(ITEM IN LISTS COMP_CLASSES)
-      if (NOT ITEM STREQUAL "cpl")
-          set_target_properties(${ITEM} PROPERTIES FFLAGS "-fPIC -DPIC")
-          target_link_libraries(${WILKINS_TARGET} ${ITEM})
-      endif()
-    endforeach()
+        foreach(ITEM IN LISTS COMP_CLASSES)
+          if (NOT ITEM STREQUAL "cpl")
+              set_target_properties(${ITEM} PROPERTIES FFLAGS "-fPIC -DPIC")
+              target_link_libraries(${WILKINS_TARGET} ${ITEM})
+          endif()
+        endforeach()
 
-    foreach(ITEM IN LISTS ALL_LIBS_LIST)
-        target_link_libraries(${WILKINS_TARGET} ${ITEM})
-    endforeach()
+        foreach(ITEM IN LISTS ALL_LIBS_LIST)
+            target_link_libraries(${WILKINS_TARGET} ${ITEM})
+        endforeach()
 
-    if (USE_MOAB)
-        target_link_libraries(${WILKINS_TARGET} ${MOAB_LIBRARIES})
-        target_include_directories(${WILKINS_TARGET} PRIVATE ${MOAB_INCLUDE_DIRS})
-    endif()
-    
-    if (USE_ROMS)
-      message("Linking ROMS library now")
-      target_link_libraries(${WILKINS_TARGET} ${ROMS_LIBRARY})
-      set_property(TARGET ${WILKINS_TARGET} PROPERTY POSITION_INDEPENDENT_CODE 1)
-      #target_link_libraries(${WILKINS_TARGET} "-pie -Wl,--export-dynamic")
-    endif()
+        if (USE_MOAB)
+            target_link_libraries(${WILKINS_TARGET} ${MOAB_LIBRARIES})
+            target_include_directories(${WILKINS_TARGET} PRIVATE ${MOAB_INCLUDE_DIRS})
+        endif()
+        
+        if (USE_ROMS)
+          message("Linking ROMS library now")
+          target_link_libraries(${WILKINS_TARGET} ${ROMS_LIBRARY})
+          set_property(TARGET ${WILKINS_TARGET} PROPERTY POSITION_INDEPENDENT_CODE 1)
+          #target_link_libraries(${WILKINS_TARGET} "-pie -Wl,--export-dynamic")
+        endif()
 
-    # Make sure we link blas/lapack
-    if (NOT DEFINED ENV{SKIP_BLAS})
-        target_link_libraries(${WILKINS_TARGET} BLAS::BLAS LAPACK::LAPACK)
-    endif()
+        # Make sure we link blas/lapack
+        if (NOT DEFINED ENV{SKIP_BLAS})
+            target_link_libraries(${WILKINS_TARGET} BLAS::BLAS LAPACK::LAPACK)
+        endif()
 
-    if (E3SM_LINK_WITH_FORTRAN)
-        set_target_properties(${WILKINS_TARGET} PROPERTIES LINKER_LANGUAGE Fortran)
+        if (E3SM_LINK_WITH_FORTRAN)
+            set_target_properties(${WILKINS_TARGET} PROPERTIES LINKER_LANGUAGE Fortran)
 
-      # A bit hacky, some platforms need help with the fortran linker
-      if (COMPILER STREQUAL "intel" OR COMPILER STREQUAL "oneapi-ifx")
-        string(APPEND CMAKE_EXE_LINKER_FLAGS " -cxxlib")
-      endif()
+          # A bit hacky, some platforms need help with the fortran linker
+          if (COMPILER STREQUAL "intel" OR COMPILER STREQUAL "oneapi-ifx")
+            string(APPEND CMAKE_EXE_LINKER_FLAGS " -cxxlib")
+          endif()
 
-    else()
-        set_target_properties(${WILKINS_TARGET} PROPERTIES LINKER_LANGUAGE CXX)
+        else()
+            set_target_properties(${WILKINS_TARGET} PROPERTIES LINKER_LANGUAGE CXX)
 
-      if (COMPILER STREQUAL "oneapi-ifxgpu")
-        string(APPEND CMAKE_EXE_LINKER_FLAGS " -Wl,-\-defsym,main=MAIN_\_ -lifcore -\-intel -fsycl -lsycl -Xsycl-target-backend \"-device 12.60.7\" ")
-      endif()
+          if (COMPILER STREQUAL "oneapi-ifxgpu")
+            string(APPEND CMAKE_EXE_LINKER_FLAGS " -Wl,-\-defsym,main=MAIN_\_ -lifcore -\-intel -fsycl -lsycl -Xsycl-target-backend \"-device 12.60.7\" ")
+          endif()
 
-    endif()
+        endif()
 
-    # Subtle: In order for fortran dependency scanning to work, our CPPFPP/DEFS must be registered
-    # as COMPILE_DEFINITIONS, not simple added via CMAKE_Fortran_Flags. Also, CPPDEFS *must*
-    # be provided as a list, not a whitespace-separated string; otherwise, things get wonky.
-    separate_arguments(WILKINS_CPPDEFS_LIST UNIX_COMMAND "${CPPDEFS}")
-    target_compile_definitions(${WILKINS_TARGET} PRIVATE ${WILKINS_CPPDEFS_LIST})
-    add_dependencies(${WILKINS_TARGET} genf90)
+        # Subtle: In order for fortran dependency scanning to work, our CPPFPP/DEFS must be registered
+        # as COMPILE_DEFINITIONS, not simple added via CMAKE_Fortran_Flags. Also, CPPDEFS *must*
+        # be provided as a list, not a whitespace-separated string; otherwise, things get wonky.
+        separate_arguments(WILKINS_CPPDEFS_LIST UNIX_COMMAND "${CPPDEFS}")
+        target_compile_definitions(${WILKINS_TARGET} PRIVATE ${WILKINS_CPPDEFS_LIST})
+        add_dependencies(${WILKINS_TARGET} genf90)
 
-    # Set flags for target
-    target_include_directories(${WILKINS_TARGET} PRIVATE ${INCLDIR})
-
+        # Set flags for target
+        target_include_directories(${WILKINS_TARGET} PRIVATE ${INCLDIR})
+    endif(DEFINED HENSON_PATH OR DEFINED ENV{HENSON_PATH})
     # ----- end building e3sm_shared.so for wilkins workflow -----
 
 
