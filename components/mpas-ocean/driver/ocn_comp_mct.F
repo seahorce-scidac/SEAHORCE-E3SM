@@ -1380,24 +1380,6 @@ contains
             block_ptr => block_ptr % next
          end do
 
-#ifdef MOAB_ROMS_COUPLING
-         ! We are now exporting data from MPAS-O to coupler
-         ! this is a good time to export data from MPAS-O to ROMS as well
-         ! and invoke ROMS one-way coupled run.
-         call mpas_log_write('   Invoking MPAS-O-ROMS-Export for one-way coupled run')
-         call ocn_export_roms_moab(EClock)
-
-         ! pass the same MPAS time to ROMS and start the run with updated data
-         if (iam==0.) then
-            call seq_timemgr_EClockGetData( EClock, stepno=cur_ocn_stepno )
-            write(lnum,"(I0.2)") cur_ocn_stepno
-            write (WCstring,'(F18.3)') dt
-            call mpas_log_write('  Computing ROMS sub-grid scale evolution for step ' // &
-                                    lnum // ' with dt = ' // WCstring // ' ...')
-         endif
-         call roms_run_coupled(dt)
-#endif
-
         ! update scaled data ice-shelf melt fluxes based on remove ice runoff
         call ocn_update_scaled_dismf(domain)
 
@@ -1497,6 +1479,10 @@ contains
 #ifdef HAVE_MOAB
       o2x_om2 = 0.0_RKIND
       call ocn_export_mct(o2x_om2, errorCode)
+      if (errorCode /= 0) then
+         call mpas_log_write('ERROR in ocn_export_mct', MPAS_LOG_CRIT)
+      endif
+
       o2x_om = transpose(o2x_om2)
       tagname = trim(seq_flds_o2x_fields)//C_NULL_CHAR
       ent_type = 1 ! cells
@@ -1510,15 +1496,28 @@ contains
       write(lnum,"(I0.2)")cur_ocn_stepno
       outfile = 'ocn_export_'//trim(lnum)//'.h5m'//C_NULL_CHAR
       wopts   = 'PARALLEL=WRITE_PART'//C_NULL_CHAR
-      ierr = iMOAB_WriteMesh(MPOID, outfile, wopts)
+      !ierr = iMOAB_WriteMesh(MPOID, outfile, wopts)
+#endif
+
+#ifdef MOAB_ROMS_COUPLING
+      ! We are now exporting data from MPAS-O to coupler
+      ! this is a good time to export data from MPAS-O to ROMS as well
+      ! and invoke ROMS one-way coupled run.
+      call mpas_log_write('   Invoking MPAS-O-ROMS-Export for one-way coupled run')
+      call ocn_export_roms_moab(EClock)
+
+      ! pass the same MPAS time to ROMS and start the run with updated data
+      call seq_timemgr_EClockGetData( EClock, stepno=cur_ocn_stepno )
+      call mpas_log_write('Computing ROMS sub-grid scale evolution: '//trim(timeStamp))
+      call roms_run_coupled(dt)
 #endif
 
 #else
       call ocn_export_mct(o2x_o % rAttr, errorCode)
-#endif
       if (errorCode /= 0) then
          call mpas_log_write('ERROR in ocn_export_mct', MPAS_LOG_CRIT)
       endif
+#endif
       if (debugOn) call mpas_log_write('Finished exporting ocean state')
       call check_clocks_sync(domain % clock, Eclock, ierr)
 
@@ -3836,12 +3835,12 @@ contains
    integer :: ent_type, ierr, cur_ocn_stepno
    integer :: tagtype, numco, tagindex
    character(len=100) :: outfile, wopts, localmeshfile, lnum
-   character(len=1024) :: dtagname, itagname, atagname, vtagname
+   character(len=1024) :: dtagname, itagname, atagname
 
    logical (kind=log_kind) :: &
          first_call = .true.   ! first call flag
    integer, allocatable :: impas2roms_arr(:,:)
-   real (kind=RKIND) , allocatable :: dmpas2roms_arr(:,:), mpas2roms_arr(:,:), vmpas2roms_arr(:,:)
+   real (kind=RKIND) , allocatable :: dmpas2roms_arr(:,:), mpas2roms_arr(:,:)
    integer :: i, j, n, iCell, iLevel, offset, total_tagsize, nVariables, nTotalCells
    integer, pointer :: nCellsSolve, nVertLevels, index_temperatureSurfaceValue, &
                        index_salinitySurfaceValue, index_avgZonalSurfaceVelocity, &
@@ -3880,7 +3879,6 @@ contains
    itagname = trim('minLevelCell:maxLevelCell')//C_NULL_CHAR
    atagname = trim('ssh:bottomDepth:fCell:seaIcePressure:atmosphericPressure:windStressZonal:windStressMeridional:evaporationFlux:rainFlux:temperatureSurfaceValue:salinitySurfaceValue:avgZonalSurfaceVelocity:avgMeridionalSurfaceVelocity')//C_NULL_CHAR
    dtagname = trim('layerThickness:temperature:salinity:velocityZonal:velocityMeridional')//C_NULL_CHAR
-   vtagname = trim('refBottomDepth')//C_NULL_CHAR
 
    n = 0
    nTotalCells = 0
@@ -3904,13 +3902,6 @@ contains
          ierr = iMOAB_DefineTagStorage(MPOID, dtagname, tagtype, numco, tagindex )
          if ( ierr == 1 ) then
             call mpas_log_write('cannot define tags for MOAB dtagname fields ' // trim(dtagname), MPAS_LOG_ERR)
-         endif
-
-         numco = nVertLevels !  nvertical level values
-         tagtype = 4  ! sparse, double
-         ierr = iMOAB_DefineTagStorage(MPOID, vtagname, tagtype, numco, tagindex )
-         if ( ierr == 1 ) then
-            call mpas_log_write('cannot define tags for MOAB vtagname fields ' // trim(vtagname), MPAS_LOG_ERR)
          endif
 
          numco = 1 !  one value per cell / entity
@@ -3970,17 +3961,11 @@ contains
         allocate (impas2roms_arr(nCellsSolve, 2) )
         allocate (mpas2roms_arr(nCellsSolve, nVariables) )
         allocate (dmpas2roms_arr(nVertLevels * nCellsSolve, 5) )
-        allocate (vmpas2roms_arr(nVertLevels, 1) )
      endif
 
      impas2roms_arr(:,:) = 0
      mpas2roms_arr(:,:) = 0.0
-     vmpas2roms_arr(:,:) = 0.0
-     vmpas2roms_arr(:,:) = 0.0
-
-     do j = 1, nVertLevels
-       vmpas2roms_arr(j, 1) = refBottomDepth(j)
-     end do
+     dmpas2roms_arr(:,:) = 0.0
 
      do iCell = 1, nCellsSolve
        n = n + 1
@@ -4053,13 +4038,6 @@ contains
    endif
 
    !  set all tags in one method
-   total_tagsize = nVertLevels * 1
-   ierr = iMOAB_SetDoubleTagStorage ( MPOID, vtagname, total_tagsize, ent_type, vmpas2roms_arr(1,1) )
-   if ( ierr /= 0 ) then
-      write(ocnLogUnit,*) 'Failed to set refBottomDepth MOAB fields '
-   endif
-
-   !  set all tags in one method
    total_tagsize = nTotalCells * nVariables
    ierr = iMOAB_SetDoubleTagStorage ( MPOID, atagname, total_tagsize, ent_type, mpas2roms_arr(1,1) )
    if ( ierr /= 0 ) then
@@ -4068,24 +4046,24 @@ contains
 
    !-----------------------------------------------------------------------
    !EOC
-!#ifdef MOABDEBUG
-      call seq_timemgr_EClockGetData( EClock, stepno=cur_ocn_stepno )
-      write(lnum,"(I0.2)") cur_ocn_stepno
-      outfile = 'mpaso_roms_export_'//trim(lnum)//'.h5m'//C_NULL_CHAR
-      wopts   = 'PARALLEL=WRITE_PART'//C_NULL_CHAR
+   call seq_timemgr_EClockGetData( EClock, stepno=cur_ocn_stepno )
+   write(lnum,"(I0.2)") cur_ocn_stepno
+   outfile = 'mpaso_roms_export_'//trim(lnum)//'.h5m'//C_NULL_CHAR
+   wopts   = 'PARALLEL=WRITE_PART'//C_NULL_CHAR
 
-      call mpas_log_write('   Writing MPAS-O mesh and data to ' // outfile // ' in ocn_export_roms_moab')
-      ierr = iMOAB_WriteMesh(MPOID, outfile, wopts)
-      ! outfile = 'mpaso_roms_export_'//trim(lnum)//C_NULL_CHAR
-      ! ierr = iMOAB_WriteCoverageMesh(m2r_appid, outfile)
-!#endif
+   call mpas_log_write('== Writing MPAS-O mesh/data to ' // trim(outfile) // ' in ocn_export_roms_moab')
+   ierr = iMOAB_WriteMesh(MPOID, outfile, wopts)
+   if ( ierr /= 0 ) then
+      write(ocnLogUnit,*) 'Failed to export MOAB tags with ROMS fields for step: ' // trim(lnum)
+   endif
+
+   !-----------------------------------------------------------------------
 
    ! deallocate moab fields array
    if (allocated(impas2roms_arr)) then
       deallocate (impas2roms_arr)
       deallocate (mpas2roms_arr)
       deallocate (dmpas2roms_arr)
-      deallocate (vmpas2roms_arr)
    endif
 
 !-----------------------------------------------------------------------
