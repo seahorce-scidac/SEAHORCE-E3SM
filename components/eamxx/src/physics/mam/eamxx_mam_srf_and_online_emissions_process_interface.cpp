@@ -42,7 +42,6 @@ void MAMSrfOnlineEmiss::create_requests() {
   using namespace ShortFieldTagsNames;
   constexpr auto m2     = pow(m, 2);
   constexpr auto s2     = pow(s, 2);
-  constexpr auto nondim = ekat::units::Units::nondimensional();
 
   const FieldLayout scalar2d   = grid_->get_2d_scalar_layout();
   const FieldLayout scalar3d_m = grid_->get_3d_scalar_layout(LEV);   // mid
@@ -81,7 +80,7 @@ void MAMSrfOnlineEmiss::create_requests() {
 
   //----------- Variables from coupler (ocean component)---------
   // Ocean fraction [unitless]
-  add_field<Required>("ocnfrac", scalar2d, nondim, grid_name);
+  add_field<Required>("ocnfrac", scalar2d, none, grid_name);
 
   // Sea surface temperature [K]
   add_field<Required>("sst", scalar2d, K, grid_name);
@@ -297,6 +296,9 @@ void MAMSrfOnlineEmiss::initialize_impl(const RunType run_type) {
   set_ranges_process(ranges_emissions);
   add_interval_checks();
 
+  // Get dust emission scheme from namelist
+  auto dust_emis_scheme = m_params.get<int>("dust_emis_scheme", 1);
+
   // ---------------------------------------------------------------
   // Input fields read in from IC file, namelist or other processes
   // ---------------------------------------------------------------
@@ -337,11 +339,18 @@ void MAMSrfOnlineEmiss::initialize_impl(const RunType run_type) {
   //-----------------------------------------------------------------
   // Read Soil erodibility data
   //-----------------------------------------------------------------
-  // This data is time-independent, we read all data here for the
-  // entire simulation
-  soilErodibilityFunc::update_soil_erodibility_data_from_file(
-      serod_dataReader_, *serod_horizInterp_,
-      soil_erodibility_);  // output
+  if (dust_emis_scheme == 1) {
+    // This data is time-independent, we read all data here for the
+    // entire simulation   
+    soilErodibilityFunc::update_soil_erodibility_data_from_file(
+        serod_dataReader_, *serod_horizInterp_,
+        soil_erodibility_);  // output
+  } else if (dust_emis_scheme == 2) {
+    // For dust emission scheme 2, override soil erodibility to 1
+    auto soil_erod_ones = view_1d("soil_erod_ones", ncol_);
+    Kokkos::deep_copy(soil_erod_ones, 1.0);
+    soil_erodibility_ = soil_erod_ones;
+  }
 
   //--------------------------------------------------------------------
   // Update marine orgaincs from file

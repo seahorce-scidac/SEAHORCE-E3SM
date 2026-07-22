@@ -23,7 +23,6 @@ void SPC::create_requests()
   using namespace ekat::units;
   using namespace ShortFieldTagsNames;
 
-  constexpr auto nondim = Units::nondimensional();
   constexpr int ps = SCREAM_PACK_SIZE;
 
   m_model_grid = m_grids_manager->get_grid("physics");
@@ -51,12 +50,20 @@ void SPC::initialize_impl (const RunType /* run_type */)
   };
   auto spc_data_file = m_params.get<std::string>("spc_data_file");
   auto spc_map_file  = m_params.get<std::string>("spc_remap_file","");
+  auto time_interpolation_method = m_params.get<std::string>("time_interpolation_method","yearly_periodic");
 
   auto pmid = get_field_in("p_mid");
-
-  util::TimeStamp ref_ts (1,1,1,0,0,0); // Beg of any year, since we use yearly periodic timeline
+  
   m_data_interpolation = std::make_shared<DataInterpolation>(m_model_grid,spc_fields);
-  m_data_interpolation->setup_time_database ({spc_data_file},util::TimeLine::YearlyPeriodic, DataInterpolation::Linear, ref_ts);
+  if (time_interpolation_method=="yearly_periodic") {
+    m_data_interpolation->setup_periodic_time_database ({spc_data_file});
+  } else if (time_interpolation_method=="linear") {
+    m_data_interpolation->setup_linear_time_database ({spc_data_file});
+  } else {
+    EKAT_ERROR_MSG("Error! Invalid time_interpolation_method: " + 
+                   time_interpolation_method + 
+                   ". Valid options are: yearly_periodic, linear.\n");
+  }
 
   if (m_iop_data_manager!=nullptr) {
     // IOP cases cannot have a remap file. We will create a IOPRemapper as the horiz remapper
@@ -77,11 +84,10 @@ void SPC::initialize_impl (const RunType /* run_type */)
   vremap_data.pname = "PS";
   vremap_data.pmid = pmid;
   m_data_interpolation->create_vert_remapper (vremap_data);
-  m_data_interpolation->init_data_interval (start_of_step_ts());
+  m_data_interpolation->init_time_interpolation (start_of_step_ts(), DataInterpolation::Linear);
 
   // Set property checks for fields in this process
   using FWI = FieldWithinIntervalCheck;
-  const auto eps = std::numeric_limits<double>::epsilon();
 
   add_postcondition_check<FWI>(get_field_out("o3_volume_mix_ratio"),m_model_grid,1e-36,1e-2,true);
 }

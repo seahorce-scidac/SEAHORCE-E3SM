@@ -10,6 +10,7 @@
 #include <ekat_pack_utils.hpp>
 
 #include <numeric>
+#include <filesystem>
 
 namespace scream
 {
@@ -21,7 +22,8 @@ HorizontalRemapper (const grid_ptr_type& src_grid,
                     const bool track_mask)
  : m_track_mask (track_mask)
 {
-  set_name("HorizRemapper " + map_file);
+  std::filesystem::path p(map_file);
+  set_name("HRemap " + p.filename().string());
 
   m_remap_data = HorizRemapperDataRepo::instance().get_data(src_grid,tgt_grid,map_file);
 
@@ -45,7 +47,8 @@ HorizontalRemapper (const grid_ptr_type& grid,
                     const bool track_mask)
  : m_track_mask (track_mask)
 {
-  set_name("HorizRemapper " + map_file);
+  std::filesystem::path p(map_file);
+  set_name("HRemap " + p.filename().string());
 
   m_remap_data = HorizRemapperDataRepo::instance().get_data(grid,map_file);
 
@@ -116,14 +119,14 @@ registration_ends_impl ()
     // Store copy, since we'll register more fields as we process masks
     int num_orig_fields = m_num_fields;
     for (int i=0; i<num_orig_fields; ++i) {
-      const auto& src_hdr = m_src_fields[i].get_header();
-            auto& tgt_hdr = m_tgt_fields[i].get_header();
-
-      if (not src_hdr.has_extra_data("valid_mask"))
+      if (not m_src_fields[i].has_valid_mask())
         continue;
 
+      const auto& src_hdr = m_src_fields[i].get_header();
+
       const auto& f_name = src_hdr.get_identifier().name();
-      const auto& src_mask = src_hdr.get_extra_data<Field>("valid_mask");
+
+      const auto& src_mask = m_src_fields[i].get_valid_mask();
       const auto& mask_name = src_mask.name();
       const auto ps = src_hdr.get_alloc_properties().get_largest_pack_size();
 
@@ -137,14 +140,14 @@ registration_ends_impl ()
           "  - mask layout: " + m_lt.to_string() + "\n");
 
       // Make sure fields representing masks are not themselves meant to be masked.
-      EKAT_REQUIRE_MSG(not src_mask.get_header().has_extra_data("valid_mask"),
+      EKAT_REQUIRE_MSG(not src_mask.has_valid_mask(),
           "Error! A mask field cannot be itself masked.\n"
           "  - field name: " + f_name + "\n"
           "  - mask field name: " + mask_name + "\n");
 
       if (not m_lt.has_tag(COL)) {
         // This field doesn't really need to be remapped, so tgt can use the same mask field as src
-        tgt_hdr.set_extra_data("valid_mask",src_mask.alias(mask_name,get_tgt_grid()->name()));
+        m_tgt_fields[i].set_valid_mask(src_mask.alias(mask_name,get_tgt_grid()->name()));
         continue;
       }
 
@@ -155,7 +158,7 @@ registration_ends_impl ()
         tgt_mask.get_header().get_alloc_properties().request_allocation(ps);
         m_name_to_src_real_mask[mask_name].get_header().get_alloc_properties().request_allocation(ps);
         m_name_to_tgt_real_mask[mask_name].get_header().get_alloc_properties().request_allocation(ps);
-        tgt_hdr.set_extra_data("valid_mask",tgt_mask);
+        m_tgt_fields[i].set_valid_mask(tgt_mask);
         continue;
       }
 
@@ -175,7 +178,7 @@ registration_ends_impl ()
       auto tgt_fid = create_tgt_fid(src_fid);
       tgt_mask = Field(tgt_fid);
       tgt_mask.get_header().get_alloc_properties().request_allocation(ps);
-      tgt_hdr.set_extra_data("valid_mask",tgt_mask);
+      m_tgt_fields[i].set_valid_mask(tgt_mask);
       m_name_to_tgt_int_mask[mask_name] = tgt_mask;
     }
   }
@@ -301,7 +304,7 @@ void HorizontalRemapper::remap_fwd_impl ()
     const auto& x = coarsen ? m_src_fields[i] : m_ov_fields[i];
     const auto& y = coarsen ? m_ov_fields[i] : m_tgt_fields[i];
 
-    const bool masked = m_track_mask and x.get_header().has_extra_data("valid_mask");
+    const bool masked = m_track_mask and x.has_valid_mask();
     if (masked) {
       // If possible, dispatch kernel with SCREAM_PACK_SIZE
       if (can_pack_field(x) and can_pack_field(y)) {
@@ -337,8 +340,8 @@ void HorizontalRemapper::remap_fwd_impl ()
   if (m_track_mask) {
     for (int i=0; i<m_num_fields; ++i) {
       auto& f_tgt = m_tgt_fields[i];
-      if (f_tgt.get_header().has_extra_data("valid_mask")) {
-        const auto& mask_name = f_tgt.get_header().get_extra_data<Field>("valid_mask").name();
+      if (f_tgt.has_valid_mask()) {
+        const auto& mask_name = f_tgt.get_valid_mask().name();
         const auto& real_mask = m_name_to_tgt_real_mask.at(mask_name);
         // TODO:
         //  1. compute mask=real_mask>thresh via compute_mask
@@ -358,7 +361,7 @@ void HorizontalRemapper::
 local_mat_vec (const Field& x, const Field& y) const
 {
   if (m_timers_enabled)
-    start_timer(name()+" mat-vec");
+    start_timer(name()+" matvec");
 
   using RangePolicy = typename KT::RangePolicy;
   using MemberType  = typename KT::MemberType;
@@ -476,7 +479,7 @@ local_mat_vec (const Field& x, const Field& y) const
       EKAT_ERROR_MSG("[HorizInterpRemapperBase::local_mat_vec] Error! Fields of rank 4 or greater are not supported.\n");
   }
   if (m_timers_enabled)
-    stop_timer(name()+" mat-vec");
+    stop_timer(name()+" matvec");
 }
 
 template<int PackSize>
@@ -501,7 +504,7 @@ rescale_masked_fields (const Field& x, const Field& real_mask) const
   const Real mask_threshold = std::numeric_limits<Real>::epsilon();  // TODO: Should we not hardcode the threshold for simply masking out the column.
 
   Pack fv_pack(fill_val);
-  auto& mask = x.get_header().get_extra_data<Field>("valid_mask");
+  auto& mask = x.get_valid_mask();
   switch (rank) {
     case 1:
     {
@@ -615,7 +618,7 @@ void HorizontalRemapper::
 local_mat_vec_masked (const Field& x, const Field& y) const
 {
   if (m_timers_enabled)
-    start_timer(name()+" mat-vec (masked)");
+    start_timer(name()+" matvec masked");
 
   using RangePolicy = typename KT::RangePolicy;
   using MemberType  = typename KT::MemberType;
@@ -624,7 +627,7 @@ local_mat_vec_masked (const Field& x, const Field& y) const
   using PackInfo    = ekat::PackInfo<PackSize>;
 
   const auto& src_layout = x.get_header().get_identifier().get_layout();
-  const auto& mask_name = x.get_header().get_extra_data<Field>("valid_mask").name();
+  const auto& mask_name = x.get_valid_mask().name();
   const auto& mask = m_name_to_src_real_mask.at(mask_name);
   const int rank = src_layout.rank();
   const int nrows  = m_remap_data->m_overlap_grid->get_num_local_dofs();
@@ -738,7 +741,7 @@ local_mat_vec_masked (const Field& x, const Field& y) const
     }
   }
   if (m_timers_enabled)
-    stop_timer(name()+" mat-vec (masked)");
+    stop_timer(name()+" matvec masked");
 }
 
 void HorizontalRemapper::pack_and_send ()
